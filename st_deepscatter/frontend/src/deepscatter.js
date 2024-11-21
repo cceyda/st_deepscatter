@@ -26514,17 +26514,18 @@ function add_or_delete_column(batch, field_name, data) {
     }
   }
   const new_batch = new RecordBatch(tb);
-  for (const [k, v] of batch.schema.metadata) {
-    new_batch.schema.metadata.set(k, v);
-  }
+  // for (const [k, v] of batch.schema.metadata) {
+  //   new_batch.schema.metadata.set(k, v);
+  // }
   for (const oldfield of batch.schema.fields) {
     const newfield = new_batch.schema.fields.find(
       (d) => d.name === oldfield.name
     );
     if (newfield !== void 0) {
-      for (const [k, v] of oldfield.metadata) {
-        newfield.metadata.set(k, v);
-      }
+      // for (const [k, v] of oldfield.metadata) {
+      //   newfield.metadata.set(k, v);
+      // }
+      console.log("Copying metadata");
     } else if (data !== null) {
       throw new Error("Error!");
     }
@@ -26533,10 +26534,10 @@ function add_or_delete_column(batch, field_name, data) {
     const this_field = new_batch.schema.fields.find(
       (d) => d.name === field_name
     );
-    this_field == null ? void 0 : this_field.metadata.set(
-      "created by deepscatter",
-      new Date().toISOString()
-    );
+    // this_field == null ? void 0 : this_field.metadata.set(
+    //   "created by deepscatter",
+    //   new Date().toISOString()
+    // );
   }
   return new_batch;
 }

@@ -1,20 +1,46 @@
 import polars as pl
+import pyarrow as pa  # Import pyarrow
+import pyarrow.parquet as pq
 import streamlit as st
 from st_deepscatter import st_deepscatter
 
 st.set_page_config(layout="wide")
 
-df = pl.read_csv("data/example.csv").head(65536)
+@st.cache_data
+def load_data():
+    df = pl.read_csv("data/example.csv").head(65536*4)
+    arrow_table = df.to_arrow()
+    return arrow_table,df
+# df = df.with_row_index("id")
+# Id column should be UInt64 or string otherwise selections don't work on deepscatter side
+# df = df.cast({"id":pl.UInt64})
 
-# st.write(df)
+arrow_table,df = load_data()
+st.write(len(df))
+# st.dataframe(df)
+# batches = [batch.with_columns(pl.lit(i).alias('batch_id')) for i,batch in  enumerate(df.iter_slices(n_rows=65535))]
+# arrow_table = pl.concat(batches)
 
-tiles = "./visualize/tiles"
+# .to_arrow()
+# st.write(arrow_table)
+# arrow_table = arrow_table.to_batches(max_chunksize=65536)
 
-st.title("Scatter Plot Demo")
+# st.write(batches)
+# arrow_table = pa.Table.from_batches([batches])
+# st.write(arrow_table)
+
+
+
+# arrow_table = arrow_table.to_batches(batch_size=65536)
+# arrow_table=None
+tiles = "/static/tiles"
+
+st.title("DeepScatter Plot Demo")
 
 prefs = {
-    # source_url: '/tiles',
-    "source_url": "https://bmschmidt.github.io/vietnam_war",
+    # "source_url": tiles,
+    # "source_url": "https://bmschmidt.github.io/vietnam_war",
+    # "source_url":"http://127.0.0.1:5500/scratch/open_search/streamlit_deepscatter/static/tiles"
     # arrow_table: table,
     # "click_function":
     #   "Streamlit.setComponentValue(datum)",
@@ -89,7 +115,7 @@ encoding = {
 
 
 bg_color = st.sidebar.color_picker("background_color", "#EEEDDE")
-prefs["background_color"] = bg_color
+# prefs["background_options"]["background_color"] = bg_color
 prefs["point_size"] = st.sidebar.slider("point_size", 0.5, 5.0, 2.0, 0.5) # Default point size before application of size scaling
 prefs["max_points"] = st.sidebar.number_input("max_points", 1000, 1000000, 1000000,step=1000)
 
@@ -116,24 +142,29 @@ if y_column not in df.columns:
 
 df_cols=set(df.columns)-set([y_column, x_column])
 
+def find_domain(column):
+    if str(df[column].dtype) in ["object", "utf8","String"]:
+        return len(list(df[column].unique())),None
+    else:
+        transform = st.sidebar.selectbox("transform", [None,"linear", "log","sqrt"])
+        return [df[column].min(), df[column].max()],transform
+
 use_color = st.sidebar.checkbox("Enable color")
 if use_color:
     color_option = {}
     color_column = st.sidebar.selectbox("color", df_cols, placeholder="shop_id")
-    if df[color_column].dtype == "object":
-        color_option["domain"] = df[color_column].unique()
-    else:
-        color_option["domain"] = [int(df[color_column].min()), int(df[color_column].max())]
 
     color_range = st.sidebar.selectbox(
         "color range:", ["okabe", "category10", "category20", "category20b", "category20c"]
     )
-    color_transform = st.sidebar.selectbox("transform", ["linear", "log","sqrt"])
+    
     if color_column and color_column in df.columns:
         color_option["field"] = color_column
+        color_option["domain"],transform = find_domain(color_column)
         color_option["range"] = color_range
-        color_option["domain"] = [int(df[color_column].min()), int(df[color_column].max())]
-        color_option["transform"] = color_transform  # 'log' or 'linear'
+        # st.write(color_option["domain"]) # categorical domain is not working for some reason
+        if transform:
+            color_option["transform"] = transform
         encoding["color"] = color_option
 
 use_size = st.sidebar.checkbox("Enable size")
@@ -141,16 +172,14 @@ if use_size:
     size_option = {}
     size_column = st.sidebar.selectbox("size", df_cols, placeholder="size")
     st.write(df[size_column].dtype)
-    if df[size_column].dtype == "object":
-        size_option["domain"] = df[size_column].unique()
-        st.write(size_option["domain"])
-    else:
-        size_option["domain"] = [int(df[size_column].min()), int(df[size_column].max())]
     size_range = st.sidebar.slider("range", 0.5, 5.0,(2.0,5.0),0.5)
     st.write(size_range)
     if size_column and size_column in df.columns:
         size_option["field"] = size_column
         size_option["range"] = list(size_range)
+        size_option["domain"],transform = find_domain(size_column)
+        if transform:
+            size_option["transform"] = transform
         encoding["size"] = size_option
 
 use_filter = st.sidebar.checkbox("Enable filter")
@@ -166,14 +195,12 @@ if use_filter:
         filter_option["field"] = filter_column
         filter_option["op"] = filter_op
         filter_option["a"] = filter_value_a
-        encoding["filter"] = filter_option
+        if filter_option["a"]:
+            encoding["filter"] = filter_option
 
 
 excluded_columns = ["site_id"]
 
-
-    
-arrow_table = df.to_arrow()
 # prefs['zoom']={"bbox":{"x":[-12.196905455436436,19.045251908254468],"y":[-2.943801298144175,6.5378853069212655]}}
 
 # if "zoom_state" not in st.session_state:
@@ -206,57 +233,58 @@ st.write(st.session_state['rerun_count'])
 
 @st.fragment
 def plot_scatter():
+
     cols = st.columns(3)
+
     with cols[0]:
-
-
+        
         plot_state = st_deepscatter(encoding=encoding,
                                     arrow_table=arrow_table,
-                                    id_column="row_id",
+                                    # id_column="index",
+                                    select_ids=st.session_state.get('custom_named_selections',{}),
+                                    # selected_lassos=None, # Can't do this now because it redraws at every update
                                     exclude_columns=None,
                                     container_height=400,
                                     lasso_mode=lasso_mode,
+                                    return_hovered_point=True, # Can slow down streamlit if the datasize is big
                                     show_tooltip=True,
                                     key="my_deepscatter",
                                     #    on_change=on_plot_change,
                                     **prefs)
-        st.session_state['zoom_to']= None
-        # prefs["zoom"] = None
-        if plot_state:
-            if "zoom_state" in plot_state and plot_state["zoom_state"]:
-                st.session_state["zoom_state"]=plot_state["zoom_state"]
-            if "selected_points" in plot_state:
-                st.session_state["selected_points"] = plot_state["selected_points"]
-            if "lassos" in plot_state:
-                st.session_state["lassos"] = plot_state['lassos']
-            if "selected_lassos_list" in plot_state:
-                st.session_state["selected_lassos"] = plot_state['selected_lassos_list']
-            if "hovered_point" in plot_state:
-                st.session_state["hovered_point"]=plot_state["hovered_point"]
 
+        # st.session_state['zoom_to']= None
+        # # prefs["zoom"] = None
         st.write(st.session_state)
 
     with cols[1]:
-        if "selected_lassos" in st.session_state and st.session_state["selected_lassos"]:
-            selected_lassos = st.session_state["selected_lassos"]
+        if "lassos" in plot_state and plot_state["lassos"]:
+            selected_lassos = plot_state.get("selected_lassos", {})
+            current_lasso = plot_state.get("current_lasso", None)
             st.write(f"selected_lassos:{selected_lassos}")
-        if "lassos" in st.session_state and st.session_state["lassos"]:
-            lassos = st.session_state["lassos"]
-            for lasso_id in lassos:
-                st.checkbox(lasso_id, value=(lasso_id in selected_lassos))
-                st.write(lassos[lasso_id]["point_count"])
+            for lasso_id in plot_state["lassos"]:
+                st.checkbox(lasso_id, value=(lasso_id ==current_lasso))
+                st.write(plot_state["lassos"][lasso_id]["point_count"])
     with cols[2]:
-        if "hovered_point" in st.session_state and st.session_state["hovered_point"]:
+        if "hovered_point" in plot_state and plot_state["hovered_point"]:
             st.write("hovered_point:")
-            st.write(st.session_state["hovered_point"])
+            st.write(plot_state["hovered_point"])
         
-        if "selected_points" in st.session_state:
-            st.write("selected_points:")
-            st.write(pl.DataFrame(st.session_state["selected_points"]))
+        if "selected_points" in plot_state:
+            selected_df = pl.DataFrame(plot_state["selected_points"])
+            st.write(f"selected_points:{len(selected_df)}")
+            selected_rows = st.dataframe(selected_df,
+                                         on_select="rerun",
+                                         selection_mode="multi-row")
+            if selected_rows:
+                
+                rows = selected_rows.selection.rows
+                # st.write(rows)
+                st.write(selected_df[rows]['id'].to_list())
+                st.session_state["custom_named_selections"] = {
+                    "my_selection": selected_df[rows]['id'].to_list()
+                }
     
 
-if "zoom_state" in st.session_state:
-    st.session_state["zoom_to"] = st.session_state["zoom_state"].copy()
 if "zoom_to" in st.session_state and st.session_state["zoom_to"]:
     prefs["zoom"] = {"bbox": st.session_state["zoom_to"]}
     prefs["duration"] = 0
